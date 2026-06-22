@@ -1,0 +1,129 @@
+name: Download Orna missing images as ZIP
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  download-missing-images:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Find and download missing Orna images
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from urllib.request import Request, urlopen
+          from urllib.error import HTTPError, URLError
+          import re
+          import zipfile
+          import time
+
+          root = Path(".")
+          out = Path("downloaded_missing_orna_images")
+          out.mkdir(exist_ok=True)
+
+          image_paths = set()
+
+          # Ищем ссылки на картинки в HTML/CSS/JS
+          files = []
+          for ext in ("*.html", "*.css", "*.js"):
+              files.extend(root.rglob(ext))
+
+          patterns = [
+              r"https://playorna\.com/(static/img/[^\"'()<>\s]+?\.(?:png|jpg|jpeg|webp|gif))",
+              r"/(static/img/[^\"'()<>\s]+?\.(?:png|jpg|jpeg|webp|gif))",
+              r"(?<![A-Za-z0-9_/-])(static/img/[^\"'()<>\s]+?\.(?:png|jpg|jpeg|webp|gif))",
+          ]
+
+          for file in files:
+              if ".git" in file.parts:
+                  continue
+              try:
+                  text = file.read_text(encoding="utf-8", errors="ignore")
+              except Exception:
+                  continue
+
+              for pattern in patterns:
+                  for match in re.findall(pattern, text, flags=re.I):
+                      path = match.split("?")[0].strip()
+                      if path.startswith("static/img/"):
+                          image_paths.add(path)
+
+          missing = []
+          for path in sorted(image_paths):
+              local_path = root / path
+              if not local_path.exists() or local_path.stat().st_size == 0:
+                  missing.append(path)
+
+          print(f"Найдено ссылок на картинки: {len(image_paths)}")
+          print(f"Недостающих картинок: {len(missing)}")
+
+          ok = []
+          failed = []
+
+          headers = {
+              "User-Agent": "Mozilla/5.0 (compatible; OrnaCodexMirror/1.0)"
+          }
+
+          for i, path in enumerate(missing, 1):
+              url = "https://playorna.com/" + path
+              target = out / path
+              target.parent.mkdir(parents=True, exist_ok=True)
+
+              print(f"[{i}/{len(missing)}] {path}")
+
+              success = False
+              last_error = ""
+
+              for attempt in range(1, 4):
+                  try:
+                      req = Request(url, headers=headers)
+                      with urlopen(req, timeout=30) as response:
+                          data = response.read()
+                      if data:
+                          target.write_bytes(data)
+                          ok.append(path)
+                          success = True
+                          break
+                  except Exception as e:
+                      last_error = str(e)
+                      time.sleep(1.5 * attempt)
+
+              if not success:
+                  failed.append(url)
+                  print("FAILED:", url, last_error)
+
+          Path("downloaded_ok.txt").write_text("\n".join(ok), encoding="utf-8")
+          Path("downloaded_failed.txt").write_text("\n".join(failed), encoding="utf-8")
+
+          zip_name = "orna_missing_images_downloaded.zip"
+          with zipfile.ZipFile(zip_name, "w", compression=zipfile.ZIP_DEFLATED) as z:
+              for file in out.rglob("*"):
+                  if file.is_file():
+                      z.write(file, file.relative_to(out))
+              z.write("downloaded_ok.txt")
+              z.write("downloaded_failed.txt")
+
+          print("")
+          print("Готово")
+          print("Скачано:", len(ok))
+          print("Не скачалось:", len(failed))
+          print("Архив:", zip_name)
+          PY
+
+      - name: Upload ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: orna_missing_images_downloaded
+          path: orna_missing_images_downloaded.zip
