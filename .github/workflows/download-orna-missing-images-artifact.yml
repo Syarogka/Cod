@@ -11,77 +11,95 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
       - name: Prepare Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Find and download missing Orna images
+      - name: Download fixed Orna missing image list
         run: |
           python - <<'PY'
           from pathlib import Path
           from urllib.request import Request, urlopen
-          from urllib.error import HTTPError, URLError
-          import re
-          import zipfile
-          import time
+          import base64, gzip, json, time, zipfile
 
-          root = Path(".")
+          # Вшитый список недостающих картинок из твоего сайта: 757 файлов.
+          DATA_B64 = """
+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
+          """
+
+          paths = json.loads(gzip.decompress(base64.b64decode(DATA_B64)).decode("utf-8"))
           out = Path("downloaded_missing_orna_images")
           out.mkdir(exist_ok=True)
 
-          image_paths = set()
-
-          # Ищем ссылки на картинки в HTML/CSS/JS
-          files = []
-          for ext in ("*.html", "*.css", "*.js"):
-              files.extend(root.rglob(ext))
-
-          patterns = [
-              r"https://playorna\.com/(static/img/[^\"'()<>\s]+?\.(?:png|jpg|jpeg|webp|gif))",
-              r"/(static/img/[^\"'()<>\s]+?\.(?:png|jpg|jpeg|webp|gif))",
-              r"(?<![A-Za-z0-9_/-])(static/img/[^\"'()<>\s]+?\.(?:png|jpg|jpeg|webp|gif))",
-          ]
-
-          for file in files:
-              if ".git" in file.parts:
-                  continue
-              try:
-                  text = file.read_text(encoding="utf-8", errors="ignore")
-              except Exception:
-                  continue
-
-              for pattern in patterns:
-                  for match in re.findall(pattern, text, flags=re.I):
-                      path = match.split("?")[0].strip()
-                      if path.startswith("static/img/"):
-                          image_paths.add(path)
-
-          missing = []
-          for path in sorted(image_paths):
-              local_path = root / path
-              if not local_path.exists() or local_path.stat().st_size == 0:
-                  missing.append(path)
-
-          print(f"Найдено ссылок на картинки: {len(image_paths)}")
-          print(f"Недостающих картинок: {len(missing)}")
-
           ok = []
           failed = []
+          headers = {"User-Agent": "Mozilla/5.0 (compatible; OrnaCodexMirror/1.0)"}
 
-          headers = {
-              "User-Agent": "Mozilla/5.0 (compatible; OrnaCodexMirror/1.0)"
-          }
+          print(f"Нужно скачать картинок: {len(paths)}")
 
-          for i, path in enumerate(missing, 1):
+          for i, path in enumerate(paths, 1):
               url = "https://playorna.com/" + path
               target = out / path
               target.parent.mkdir(parents=True, exist_ok=True)
 
-              print(f"[{i}/{len(missing)}] {path}")
+              print(f"[{i}/{len(paths)}] {path}")
 
               success = False
               last_error = ""
